@@ -1,0 +1,86 @@
+name: Processar Feed XML
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"  # Executa a cada 12 horas
+  workflow_dispatch:  # Permite rodar manualmente
+
+permissions:
+  contents: write  # Permite fazer push automático
+
+jobs:
+  process-feed:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do Repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar cache do pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Instalar Dependências
+        run: pip install -r requirements.txt
+
+      - name: Garantir pasta json_parts existe
+        run: |
+          mkdir -p json_parts
+          touch json_parts/.gitkeep
+
+      - name: Limpar arquivos antigos
+        run: |
+          echo "🧹 Limpando arquivos antigos..."
+          rm -f json_parts/*.json
+          rm -f merged.json
+
+      - name: Executar script.py
+        run: |
+          echo "📥 Iniciando script.py..."
+          python script.py || { echo "❌ Erro no script.py"; exit 1; }
+
+      - name: Executar merge_json.py
+        run: |
+          echo "🧩 Iniciando merge_json.py..."
+          python merge_json.py || { echo "❌ Erro no merge_json.py"; exit 1; }
+
+      - name: Verificar arquivos gerados
+        run: |
+          echo "📁 Conteúdo da pasta json_parts:"
+          ls -lh json_parts/ || echo "⚠️ Pasta vazia!"
+          echo "📄 Verificando merged.json:"
+          ls -lh merged.json || echo "⚠️ Arquivo não gerado!"
+          echo "🔍 Linhas em merged.json:"
+          wc -l merged.json || echo "⚠️ Não foi possível contar linhas."
+
+      - name: Verificar existência dos arquivos antes do commit
+        run: |
+          echo "📦 Arquivos na raiz:"
+          ls -lh
+          echo "📦 Arquivos em json_parts/"
+          ls -lh json_parts || echo "⚠️ Pasta json_parts vazia!"
+
+      - name: Configurar Git
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+      - name: Commit e Push dos Arquivos JSON
+        run: |
+          timestamp=$(date)
+          echo "📝 Commit iniciado em $timestamp"
+
+          if [ -f "merged.json" ]; then
+            git add -f merged.json
+            echo "✅ merged.json adicionado ao git."
+          else
+            echo "⚠️ merged.json não encontrado!"
+          fi
+
+          git add -f json_parts/ || echo "⚠️ json_parts não encontrada"
+          git commit -m "🔄 Atualização automática dos arquivos JSON - $timestamp" || echo "⚠️ Nada para commitar"
+          git push || echo "⚠️ Nenhuma alteração para enviar"
