@@ -295,7 +295,7 @@ if response.status_code == 200:
 
             if len(jobs) >= 1000:
 
-                if file_count > 5:
+                if file_count > 8:
 
                     print(
                         "⛔ Limite de arquivos atingido"
