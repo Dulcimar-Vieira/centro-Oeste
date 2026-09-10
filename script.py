@@ -19,11 +19,10 @@ FEED_URL = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
 
 # Cidades RJ
 CIDADES_RJ = [
-    "rio de janeiro",
-    "niteroi",
-    "duque de caxias",
-    "nova iguacu",
-    "sao goncalo"
+   "distrito federal",
+    "goiás",
+    "mato grosso",
+    "mato grosso do sul"
 ]
 
 # Keywords
