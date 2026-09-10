@@ -23,8 +23,8 @@ jobs = []
 
 estados_permitidos = [
     "distrito federal",
-    "goiás",
     "mato grosso",
+    "goiás",
     "mato grosso do sul"
 ]
 
