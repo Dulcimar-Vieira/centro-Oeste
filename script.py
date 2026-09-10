@@ -21,13 +21,6 @@ jobs = []
 # ESTADOS/CIDADES PERMITIDOS
 # ==========================================
 
-estados_permitidos = [
-    "distrito federal",
-    "mato grosso",
-    "goiás",
-    "mato grosso do sul"
-]
-
 cidades_permitidas = [
     "brasilia",
     "goiania",
