@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# coding: utf-8
-
 import requests
 import gzip
 import xml.etree.ElementTree as ET
@@ -8,88 +5,84 @@ import io
 import json
 import os
 import hashlib
+import random
 import re
 from datetime import datetime
 
+feed_url = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
+
+json_folder = "json_parts"
+os.makedirs(json_folder, exist_ok=True)
+
+file_count = 1
+jobs = []
+
 # ==========================================
-# CONFIG
+# ESTADOS/CIDADES PERMITIDOS
 # ==========================================
 
-FEED_URL = "https://feeds.whatjobs.com/sinerj/sinerj_pt_BR.xml.gz"
-
-# Cidades RJ
-CIDADES_RJ = [
-   "distrito federal",
+estados_permitidos = [
+    "distrito federal",
     "goiás",
     "mato grosso",
     "mato grosso do sul"
 ]
 
-# Keywords
-KEYWORDS = []
+cidades_permitidas = [
+    "brasilia",
+    "goiania",
+    "cuiaba",
+    "campo grande"
+]
 
-# Pasta de saída
-OUTPUT_FOLDER = "json_parts"
-
-# ==========================================
-# LIMITES
-# ==========================================
-
-# vagas por arquivo
-MAX_JOBS_PER_FILE = 1000
-
-# quantidade máxima de arquivos
-MAX_FILES = 5
-
-# ==========================================
-# CRIAR PASTA
-# ==========================================
-
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+headers = {
+    "User-Agent": "Mozilla/5.0 (compatible; FeedProcessor/1.0)"
+}
 
 # ==========================================
 # FUNÇÕES
 # ==========================================
 
-def normalize(text):
-    if not text:
-        return ""
-    return text.strip().lower()
+def normalizar(texto):
+    return texto.strip().lower()
 
 
-def clean_html(text):
-    if not text:
-        return ""
-
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text)
-
-    return text.strip()
+def gerar_id(titulo, empresa, cidade, url):
+    base = f"{titulo}-{empresa}-{cidade}-{url}"
+    return hashlib.md5(base.encode()).hexdigest()
 
 
-def normalize_company(company):
-    if not company or not company.strip():
-        return "Confidencial"
+def gerar_slug(titulo, cidade):
+    texto = f"{titulo}-{cidade}"
+    texto = texto.lower()
 
-    return company.strip()
+    texto = re.sub(r"[^\w\s-]", "", texto)
+    texto = re.sub(r"\s+", "-", texto)
 
-
-def normalize_salary(text):
-    if not text:
-        return "A Combinar"
-
-    text = re.sub(r"\s+", " ", text).strip()
-
-    return text
+    return texto
 
 
-def generate_hash(title, company, city, url):
-    base = f"{title}-{company}-{city}-{url}"
-    return hashlib.md5(base.encode("utf-8")).hexdigest()
+def limpar_html(texto):
+
+    texto = re.sub(r"<[^>]+>", "", texto)
+    texto = re.sub(r"\s+", " ", texto)
+
+    return texto.strip()
 
 
-def is_valid_keyword(text):
-    return True
+def gerar_intro(titulo, cidade):
+
+    intros = [
+
+        f"Confira a vaga para {titulo} em {cidade}. Veja os detalhes e como se candidatar.",
+
+        f"Nova oportunidade para {titulo} em {cidade}. Saiba mais sobre essa vaga.",
+
+        f"Empresa está contratando {titulo} em {cidade}. Confira requisitos e envie seu currículo."
+
+    ]
+
+    return random.choice(intros)
 
 
 # ==========================================
@@ -101,177 +94,247 @@ print("📥 Baixando feed...")
 try:
 
     response = requests.get(
-        FEED_URL,
-        headers={
-            "User-Agent": "Mozilla/5.0"
-        },
-        timeout=60
+        feed_url,
+        stream=True,
+        headers=headers,
+        timeout=30
     )
 
 except requests.RequestException as e:
 
-    print(f"Erro ao baixar feed: {e}")
-    exit()
-
-if response.status_code != 200:
-
-    print(f"Erro HTTP: {response.status_code}")
-    exit()
+    print(f"Erro: {e}")
+    exit(1)
 
 # ==========================================
 # PROCESSAMENTO
 # ==========================================
 
-jobs = []
-file_count = 1
-seen_urls = set()
+if response.status_code == 200:
 
-stop_processing = False
+    with gzip.open(
+        io.BytesIO(response.content),
+        "rt",
+        encoding="utf-8"
+    ) as f:
 
-with gzip.open(
-    io.BytesIO(response.content),
-    "rt",
-    encoding="utf-8"
-) as f:
+        urls_vistas = set()
 
-    for event, elem in ET.iterparse(f, events=("end",)):
+        stop_processing = False
 
-        if stop_processing:
-            break
+        for event, elem in ET.iterparse(f, events=("end",)):
 
-        if elem.tag != "job":
-            continue
+            if stop_processing:
+                break
 
-        title = elem.findtext("title", "").strip()
-        description = elem.findtext("description", "").strip()
+            if elem.tag != "job":
+                continue
 
-        company = normalize_company(
-            elem.findtext("company/name", "")
-        )
-
-        job_type = elem.findtext("jobType", "").strip()
-        url = elem.findtext("urlDeeplink", "").strip()
-        salary = elem.findtext("salary", "").strip()
-
-        # ==========================================
-        # LOCALIZAÇÃO
-        # ==========================================
-
-        location_elem = elem.find("locations/location")
-
-        city = ""
-        state = ""
-
-        if location_elem is not None:
-
-            city = location_elem.findtext(
-                "city",
+            title = elem.findtext(
+                "title",
                 ""
             ).strip()
 
-            state = location_elem.findtext(
-                "state",
+            description = elem.findtext(
+                "description",
                 ""
             ).strip()
 
-        # ==========================================
-        # VALIDAÇÃO
-        # ==========================================
+            company = elem.findtext(
+                "company/name",
+                ""
+            ).strip()
 
-        if not city or not state or not title or not url:
-            elem.clear()
-            continue
+            job_type = elem.findtext(
+                "jobType",
+                ""
+            ).strip()
 
-        city_lower = normalize(city)
+            url = elem.findtext(
+                "urlDeeplink",
+                ""
+            ).strip()
 
-        # ==========================================
-        # FILTRO RJ
-        # ==========================================
+            # ==========================================
+            # LOCALIZAÇÃO
+            # ==========================================
 
-        if city_lower not in CIDADES_RJ:
-            elem.clear()
-            continue
+            location_elem = elem.find(
+                "locations/location"
+            )
 
-        # ==========================================
-        # FILTRO KEYWORDS
-        # ==========================================
+            city = (
+                location_elem.findtext("city", "").strip()
+                if location_elem is not None
+                else ""
+            )
 
-        content_text = f"{title} {description}"
+            state = (
+                location_elem.findtext("state", "").strip()
+                if location_elem is not None
+                else ""
+            )
 
-        if not is_valid_keyword(content_text):
-            elem.clear()
-            continue
+            # ==========================================
+            # VALIDAÇÃO
+            # ==========================================
 
-        # ==========================================
-        # REMOVER DUPLICADOS
-        # ==========================================
+            if not city or not state or not title or not url:
+                elem.clear()
+                continue
 
-        if url in seen_urls:
-            elem.clear()
-            continue
+            city_lower = normalizar(city)
+            state_lower = normalizar(state)
 
-        seen_urls.add(url)
+            # ==========================================
+            # FILTRO ESTADO
+            # ==========================================
 
-        # ==========================================
-        # LIMPEZA
-        # ==========================================
+            if state_lower not in estados_permitidos:
+                elem.clear()
+                continue
 
-        description = clean_html(description)
-        salary = normalize_salary(salary)
+            # ==========================================
+            # FILTRO CIDADE
+            # ==========================================
 
-        # ==========================================
-        # HASH
-        # ==========================================
+            if city_lower not in cidades_permitidas:
+                elem.clear()
+                continue
 
-        hash_unico = generate_hash(
-            title,
-            company,
-            city,
-            url
-        )
+            # ==========================================
+            # EMPRESA
+            # ==========================================
 
-        # ==========================================
-        # JSON
-        # ==========================================
+            if not company:
+                company = "Confidencial"
 
-        jobs.append({
+            # ==========================================
+            # DUPLICADOS
+            # ==========================================
 
-            "title": title,
-            "description": description,
-            "company": company,
-            "city": city,
-            "state": state,
+            if url in urls_vistas:
+                elem.clear()
+                continue
 
-            "salary": salary if salary else "A Combinar",
+            urls_vistas.add(url)
 
-            "tipo": (
-                job_type
-                if job_type
-                else "Nao informado"
-            ),
+            # ==========================================
+            # LIMPEZA
+            # ==========================================
 
-            "origem": "WhatJobs",
+            description = limpar_html(description)
 
-            "url": url,
+            intro = gerar_intro(
+                title,
+                city
+            )
 
-            "data_publicacao": (
+            descricao_final = (
+                intro + "\n\n" + description
+            )
+
+            # ==========================================
+            # IDs
+            # ==========================================
+
+            job_id = gerar_id(
+                title,
+                company,
+                city,
+                url
+            )
+
+            slug = gerar_slug(
+                title,
+                city
+            )
+
+            data_publicacao = (
                 datetime.utcnow().isoformat()
-            ),
+            )
 
-            "hash_unico": hash_unico
+            # ==========================================
+            # JSON
+            # ==========================================
 
-        })
+            job_data = {
 
-        elem.clear()
+                "id": job_id,
+
+                "title": title,
+
+                "slug": slug,
+
+                "description": descricao_final,
+
+                "company": company,
+
+                "city": city,
+
+                "state": state,
+
+                "tipo": (
+                    job_type
+                    if job_type
+                    else "Nao informado"
+                ),
+
+                "url": url,
+
+                "data_publicacao": data_publicacao
+
+            }
+
+            jobs.append(job_data)
+
+            elem.clear()
+
+            # ==========================================
+            # LIMITE POR ARQUIVO
+            # ==========================================
+
+            if len(jobs) >= 1000:
+
+                if file_count > 10:
+
+                    print(
+                        "⛔ Limite de arquivos atingido"
+                    )
+
+                    stop_processing = True
+                    break
+
+                json_path = os.path.join(
+                    json_folder,
+                    f"part_{file_count}.json"
+                )
+
+                with open(
+                    json_path,
+                    "w",
+                    encoding="utf-8"
+                ) as json_file:
+
+                    json.dump(
+                        jobs,
+                        json_file,
+                        ensure_ascii=False,
+                        indent=2
+                    )
+
+                print(f"✅ {json_path} gerado")
+
+                jobs = []
+                file_count += 1
 
         # ==========================================
-        # LIMITE POR ARQUIVO
+        # SALVAR RESTANTE
         # ==========================================
 
-        if len(jobs) >= MAX_JOBS_PER_FILE:
+        if jobs:
 
             json_path = os.path.join(
-                OUTPUT_FOLDER,
+                json_folder,
                 f"part_{file_count}.json"
             )
 
@@ -288,53 +351,10 @@ with gzip.open(
                     indent=2
                 )
 
-            print(f"✅ {json_path} gerado")
+            print("✅ Último arquivo gerado")
 
-            jobs = []
-            file_count += 1
+    print(f"📦 Total de arquivos: {file_count}")
 
-            # ==========================================
-            # LIMITE TOTAL DE ARQUIVOS
-            # ==========================================
+else:
 
-            if file_count > MAX_FILES:
-
-                print(
-                    "⛔ Limite máximo de arquivos atingido"
-                )
-
-                stop_processing = True
-                break
-
-# ==========================================
-# SALVAR RESTANTE
-# ==========================================
-
-if jobs and file_count <= MAX_FILES:
-
-    json_path = os.path.join(
-        OUTPUT_FOLDER,
-        f"part_{file_count}.json"
-    )
-
-    with open(
-        json_path,
-        "w",
-        encoding="utf-8"
-    ) as json_file:
-
-        json.dump(
-            jobs,
-            json_file,
-            ensure_ascii=False,
-            indent=2
-        )
-
-    print(f"✅ {json_path} gerado")
-
-# ==========================================
-# FINAL
-# ==========================================
-
-print("📦 Processamento finalizado")
-print(f"📁 Arquivos gerados: {file_count}")
+    print(f"Erro HTTP: {response.status_code}")
