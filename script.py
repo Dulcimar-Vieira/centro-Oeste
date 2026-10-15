@@ -3,6 +3,7 @@
 import gzip, hashlib, io, json, os, random, re
 import unicodedata
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
 import requests
@@ -155,8 +156,16 @@ def parse_date(s):
     for fmt in ("%d.%m.%Y","%d/%m/%Y","%Y-%m-%d","%Y-%m-%dT%H:%M:%S","%Y-%m-%dT%H:%M:%SZ"):
         try: return datetime.strptime(s,fmt)
         except ValueError: pass
-    try: return datetime.fromisoformat(s.replace("Z","+00:00"))
-    except ValueError: return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    # O feed pode trazer datas em formato RSS/RFC 822, por exemplo:
+    # Wed, 15 Oct 2026 10:30:00 GMT.
+    try:
+        return parsedate_to_datetime(s)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 def key(j):
     return j["url"] or hashlib.md5(f'{j["title"]}|{j["company"]}|{j["city"]}'.encode()).hexdigest()
