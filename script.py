@@ -209,7 +209,7 @@ def main():
             state=loc.findtext("state","").strip() if loc is not None else ""
             pub=elem.findtext("pubdate","").strip()
             dt=parse_date(pub)
-            if not title or not url or not city or not state or not dt or not matches(city,state,title,desc):
+            if not title or not url or not city or not state or not matches(city,state,title,desc):
                 elem.clear(); continue
             salary=extract_salary(source_salary,desc)
             if not salary or salary_exceeds_limit(salary, desc):
@@ -217,7 +217,7 @@ def main():
             j={"id":hashlib.md5(f"{title}-{company}-{city}-{url}".encode()).hexdigest(),
                "title":title,"description":intro(title,city)+"\n\n"+clean(desc),"salary":salary,
                "company":company,"city":city,"state":state,"tipo":typ,"url":url,
-               "data_publicacao":dt.date().isoformat(),"origem":"WhatJobs"}
+               "data_publicacao":dt.date().isoformat() if dt else datetime.now(TIMEZONE).date().isoformat(),"origem":"WhatJobs"}
             candidates[key(j)]=j
             elem.clear()
 
