@@ -1,5 +1,10 @@
 name: Processar Feed XML
 on:
+  push:
+    paths:
+      - 'script.py'
+      - 'merge_json.py'
+      - '.github/workflows/**'
   schedule:
     - cron: "0 */6 * * *"
   workflow_dispatch:
