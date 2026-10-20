@@ -12,6 +12,7 @@ permissions:
   contents: write
 jobs:
   process-feed:
+    if: false # PAUSADO temporariamente a pedido do usuário
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
