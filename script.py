@@ -195,7 +195,7 @@ def main():
     r=requests.get(FEED_URL,headers={"User-Agent":"Mozilla/5.0 (compatible; FeedProcessor/1.0)"},timeout=60)
     r.raise_for_status()
     candidates={}
-    with gzip.open(io.BytesIO(r.content),"rt",encoding="utf-8") as f:
+    with gzip.open(io.BytesIO(r.content), "rb") as f:
         for _,elem in ET.iterparse(f,events=("end",)):
             if elem.tag!="job": continue
             title=elem.findtext("title","").strip()
