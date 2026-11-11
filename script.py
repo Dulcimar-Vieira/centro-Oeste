@@ -139,9 +139,12 @@ def extract_salary(structured_salary, description):
 
 
 ESTADOS={"distrito federal","goias","mato grosso","mato grosso do sul"}
-CIDADES={"brasilia","goiania","cuiaba","campo grande"}
+
 def matches(city,state,title,desc):
-    return norm(state) in ESTADOS and norm(city) in CIDADES
+    # Centro-Oeste inclui todas as cidades dos quatro estados/DF,
+    # não apenas as capitais. Cidade continua sendo validada como campo
+    # obrigatório antes desta função.
+    return norm(state) in ESTADOS
 
 def norm(s):
     s = unicodedata.normalize("NFKD", (s or "").strip().lower())
