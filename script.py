@@ -190,14 +190,39 @@ def save_state(today,jobs):
 def main():
     today=datetime.now(TIMEZONE).date().isoformat()
     selected=load_state(today)
-    # Não reutilizar vagas antigas sem salário validado.
-    selected={k:j for k,j in selected.items() if has_real_salary(j.get("salary","")) and not salary_exceeds_limit(j.get("salary",""), j.get("description",""))}
+
+    # Mantém os registros já selecionados no dia, inclusive os que receberam
+    # "A combinar" no lote anterior. Valores acima do teto continuam excluídos.
+    selected={
+        k:j for k,j in selected.items()
+        if (
+            has_real_salary(j.get("salary",""))
+            or normalize_salary_text(j.get("salary","")) == "a combinar"
+        )
+        and not salary_exceeds_limit(j.get("salary",""), j.get("description",""))
+    }
+
     r=requests.get(FEED_URL,headers={"User-Agent":"Mozilla/5.0 (compatible; FeedProcessor/1.0)"},timeout=60)
     r.raise_for_status()
-    candidates={}
+
+    candidates_with_salary={}
+    candidates_without_salary={}
+    counts={
+        "xml_lidas":0,
+        "fora_da_regiao":0,
+        "sem_dados_obrigatorios":0,
+        "salario_acima_de_10000":0,
+        "com_salario":0,
+        "sem_salario":0,
+        "duplicadas":0,
+    }
+
     with gzip.open(io.BytesIO(r.content), "rb") as f:
         for _,elem in ET.iterparse(f,events=("end",)):
-            if elem.tag!="job": continue
+            if elem.tag!="job":
+                continue
+
+            counts["xml_lidas"]+=1
             title=elem.findtext("title","").strip()
             desc=elem.findtext("description","").strip()
             company=elem.findtext("company/name","").strip() or "Confidencial"
@@ -209,35 +234,139 @@ def main():
             state=loc.findtext("state","").strip() if loc is not None else ""
             pub=elem.findtext("pubdate","").strip()
             dt=parse_date(pub)
-            if not title or not url or not city or not state or not matches(city,state,title,desc):
-                elem.clear(); continue
+
+            if not title or not url or not city or not state:
+                counts["sem_dados_obrigatorios"]+=1
+                elem.clear()
+                continue
+
+            if not matches(city,state,title,desc):
+                counts["fora_da_regiao"]+=1
+                elem.clear()
+                continue
+
             salary=extract_salary(source_salary,desc)
-            if not salary or salary_exceeds_limit(salary, desc):
-                elem.clear(); continue
+
+            # Salários explicitamente acima do limite não entram nem mesmo
+            # como "A combinar", pois a remuneração está informada na fonte.
+            if salary_exceeds_limit(salary,desc):
+                counts["salario_acima_de_10000"]+=1
+                elem.clear()
+                continue
+
+            if salary:
+                counts["com_salario"]+=1
+                salary_value=salary
+            else:
+                counts["sem_salario"]+=1
+                salary_value="A combinar"
+
             j={"id":hashlib.md5(f"{title}-{company}-{city}-{url}".encode()).hexdigest(),
-               "title":title,"description":intro(title,city)+"\n\n"+clean(desc),"salary":salary,
+               "title":title,"description":intro(title,city)+"\n\n"+clean(desc),"salary":salary_value,
                "company":company,"city":city,"state":state,"tipo":typ,"url":url,
-               "data_publicacao":dt.date().isoformat() if dt else datetime.now(TIMEZONE).date().isoformat(),"origem":"WhatJobs"}
-            candidates[key(j)]=j
+               "data_publicacao":dt.date().isoformat() if dt else datetime.now(TIMEZONE).date().isoformat(),
+               "origem":"WhatJobs"}
+
+            job_key=key(j)
+            if has_real_salary(salary_value):
+                target=candidates_with_salary
+                other=candidates_without_salary
+            else:
+                target=candidates_without_salary
+                other=candidates_with_salary
+
+            # Se a mesma URL aparecer duas vezes, a versão com salário informado
+            # sempre prevalece sobre a versão sem salário.
+            if job_key in other:
+                if has_real_salary(salary_value):
+                    other.pop(job_key,None)
+                else:
+                    counts["duplicadas"]+=1
+                    elem.clear()
+                    continue
+            if job_key in target:
+                counts["duplicadas"]+=1
+            else:
+                target[job_key]=j
+
             elem.clear()
 
+    # Atualiza os registros já selecionados. Se o feed passou a informar salário,
+    # promove a vaga; se deixou de informar, não apaga um salário já conhecido.
+    all_candidates={**candidates_without_salary,**candidates_with_salary}
     for k in list(selected):
-        if k in candidates: selected[k]=candidates[k]
+        if k in all_candidates:
+            incoming=all_candidates[k]
+            if (
+                has_real_salary(incoming.get("salary",""))
+                or not has_real_salary(selected[k].get("salary",""))
+            ):
+                selected[k]=incoming
 
-    novos=[j for k,j in candidates.items() if k not in selected]
-    novos.sort(key=lambda j:j["data_publicacao"],reverse=True)
-    for j in novos:
-        if len(selected)>=MAX_JOBS_PER_DAY: break
-        selected[key(j)]=j
+    # Primeiro entram todas as vagas com salário conhecido.
+    salary_jobs=sorted(
+        candidates_with_salary.items(),
+        key=lambda item:item[1].get("data_publicacao",""),
+        reverse=True
+    )
+    for k,j in salary_jobs:
+        if k in selected:
+            continue
+        if len(selected)>=MAX_JOBS_PER_DAY:
+            break
+        selected[k]=j
+
+    # Só depois completamos o limite com vagas sem salário, identificadas
+    # explicitamente como "A combinar".
+    no_salary_jobs=sorted(
+        candidates_without_salary.items(),
+        key=lambda item:item[1].get("data_publicacao",""),
+        reverse=True
+    )
+    for k,j in no_salary_jobs:
+        if k in selected:
+            continue
+        if len(selected)>=MAX_JOBS_PER_DAY:
+            break
+        selected[k]=j
 
     if not selected:
-        raise SystemExit("ERRO: nenhuma vaga com remuneração válida; os arquivos existentes foram preservados.")
+        raise SystemExit(
+            "ERRO: nenhuma vaga regional válida foi encontrada; "
+            "os arquivos existentes foram preservados."
+        )
+
+    # Ordena o arquivo final com salários conhecidos primeiro e, dentro de
+    # cada grupo, prioriza as vagas mais recentes.
+    ordered_jobs=sorted(
+        selected.values(),
+        key=lambda j:j.get("data_publicacao",""),
+        reverse=True
+    )
+    ordered_jobs.sort(key=lambda j:not has_real_salary(j.get("salary","")))
+
     os.makedirs(OUTPUT_FOLDER,exist_ok=True)
     for fn in os.listdir(OUTPUT_FOLDER):
-        if fn.endswith(".json"): os.remove(os.path.join(OUTPUT_FOLDER,fn))
-    with open(os.path.join(OUTPUT_FOLDER,"part_1.json"),"w",encoding="utf-8") as f:
-        json.dump(list(selected.values())[:MAX_JOBS_PER_DAY],f,ensure_ascii=False,indent=2)
+        if fn.endswith(".json"):
+            os.remove(os.path.join(OUTPUT_FOLDER,fn))
+
+    output_path=os.path.join(OUTPUT_FOLDER,"part_1.json")
+    temp_path=output_path+".tmp"
+    with open(temp_path,"w",encoding="utf-8") as f:
+        json.dump(ordered_jobs[:MAX_JOBS_PER_DAY],f,ensure_ascii=False,indent=2)
+    os.replace(temp_path,output_path)
+
     save_state(today,selected)
-    print(f"Data: {today} | Encontradas hoje: {len(candidates)} | Selecionadas: {min(len(selected),MAX_JOBS_PER_DAY)}")
+
+    selected_with_salary=sum(1 for j in ordered_jobs if has_real_salary(j.get("salary","")))
+    selected_without_salary=len(ordered_jobs)-selected_with_salary
+
+    print("Resumo do processamento:")
+    for name,value in counts.items():
+        print(f"  {name}: {value}")
+    print(f"  selecionadas_com_salario: {selected_with_salary}")
+    print(f"  selecionadas_a_combinar: {selected_without_salary}")
+    print(f"  total_selecionado: {len(ordered_jobs[:MAX_JOBS_PER_DAY])}")
+
 
 if __name__=="__main__": main()
