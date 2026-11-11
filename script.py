@@ -331,6 +331,11 @@ def main():
         selected[k]=j
 
     if not selected:
+        print("Resumo de diagnóstico antes da interrupção:")
+        for name,value in counts.items():
+            print(f"  {name}: {value}")
+        print(f"  candidatos_com_salario: {len(candidates_with_salary)}")
+        print(f"  candidatos_a_combinar: {len(candidates_without_salary)}")
         raise SystemExit(
             "ERRO: nenhuma vaga regional válida foi encontrada; "
             "os arquivos existentes foram preservados."
