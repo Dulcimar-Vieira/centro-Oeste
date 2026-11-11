@@ -139,12 +139,15 @@ def extract_salary(structured_salary, description):
 
 
 ESTADOS={"distrito federal","goias","mato grosso","mato grosso do sul"}
+SIGLAS_ESTADOS={"df":"distrito federal","go":"goias","mt":"mato grosso","ms":"mato grosso do sul"}
 
 def matches(city,state,title,desc):
-    # Centro-Oeste inclui todas as cidades dos quatro estados/DF,
-    # não apenas as capitais. Cidade continua sendo validada como campo
-    # obrigatório antes desta função.
-    return norm(state) in ESTADOS
+    # Centro-Oeste inclui todas as cidades dos quatro estados/DF.
+    # O campo cidade não pode ser apenas o nome do estado/região.
+    state_norm=norm(state)
+    state_norm=SIGLAS_ESTADOS.get(state_norm,state_norm)
+    city_norm=norm(city)
+    return state_norm in ESTADOS and bool(city_norm) and city_norm not in ESTADOS
 
 def norm(s):
     s = unicodedata.normalize("NFKD", (s or "").strip().lower())
@@ -213,12 +216,15 @@ def main():
     counts={
         "xml_lidas":0,
         "fora_da_regiao":0,
+        "localidade_invalida":0,
         "sem_dados_obrigatorios":0,
         "salario_acima_de_10000":0,
         "com_salario":0,
         "sem_salario":0,
         "duplicadas":0,
     }
+    state_distribution={}
+    regional_city_distribution={}
 
     with gzip.open(io.BytesIO(r.content), "rb") as f:
         for _,elem in ET.iterparse(f,events=("end",)):
@@ -235,6 +241,11 @@ def main():
             loc=elem.find("locations/location")
             city=loc.findtext("city","").strip() if loc is not None else ""
             state=loc.findtext("state","").strip() if loc is not None else ""
+            state_norm=norm(state) or "(vazio)"
+            state_distribution[state_norm]=state_distribution.get(state_norm,0)+1
+            if state_norm in ESTADOS or state_norm in SIGLAS_ESTADOS:
+                city_norm=norm(city) or "(vazio)"
+                regional_city_distribution[city_norm]=regional_city_distribution.get(city_norm,0)+1
             pub=elem.findtext("pubdate","").strip()
             dt=parse_date(pub)
 
@@ -244,7 +255,12 @@ def main():
                 continue
 
             if not matches(city,state,title,desc):
-                counts["fora_da_regiao"]+=1
+                state_norm=norm(state)
+                state_norm=SIGLAS_ESTADOS.get(state_norm,state_norm)
+                if state_norm in ESTADOS and norm(city) in ESTADOS:
+                    counts["localidade_invalida"]+=1
+                else:
+                    counts["fora_da_regiao"]+=1
                 elem.clear()
                 continue
 
@@ -353,6 +369,40 @@ def main():
     )
     ordered_jobs.sort(key=lambda j:not has_real_salary(j.get("salary","")))
 
+    # Proteção: um feed parcial não pode substituir o último lote íntegro.
+    previous_count=0
+    if os.path.isfile("merged.json"):
+        try:
+            with open("merged.json",encoding="utf-8") as previous_file:
+                previous_data=json.load(previous_file)
+            previous_count=int(previous_data.get("total_vagas") or len(previous_data.get("vagas",[])))
+        except (OSError,ValueError,TypeError):
+            raise SystemExit(
+                "ERRO: não foi possível validar o merged.json anterior; "
+                "os arquivos existentes foram preservados."
+            )
+
+    minimum_safe_count=int(previous_count*0.75) if previous_count else 1
+    if previous_count and len(ordered_jobs)<minimum_safe_count:
+        print("Resumo do processamento:")
+        for name,value in counts.items():
+            print(f"  {name}: {value}")
+        print(f"  selecionadas_com_salario: {sum(1 for j in ordered_jobs if has_real_salary(j.get('salary','')))}")
+        print(f"  selecionadas_a_combinar: {sum(1 for j in ordered_jobs if not has_real_salary(j.get('salary','')))}")
+        print(f"  total_selecionado: {len(ordered_jobs)}")
+        print(f"  lote_anterior_valido: {previous_count}")
+        print(f"  minimo_para_substituicao: {minimum_safe_count}")
+        print("  estados_encontrados:")
+        for name,value in sorted(state_distribution.items(),key=lambda item:item[1],reverse=True)[:20]:
+            print(f"    {name}: {value}")
+        print("  cidades_nos_estados_do_centro_oeste:")
+        for name,value in sorted(regional_city_distribution.items(),key=lambda item:item[1],reverse=True)[:30]:
+            print(f"    {name}: {value}")
+        raise SystemExit(
+            "ERRO: feed retornou lote abaixo do mínimo de segurança; "
+            "merged.json, part_1.json e daily_jobs_state.json foram preservados."
+        )
+
     os.makedirs(OUTPUT_FOLDER,exist_ok=True)
     for fn in os.listdir(OUTPUT_FOLDER):
         if fn.endswith(".json"):
@@ -372,6 +422,9 @@ def main():
     print("Resumo do processamento:")
     for name,value in counts.items():
         print(f"  {name}: {value}")
+    print("  estados_encontrados:")
+    for name,value in sorted(state_distribution.items(),key=lambda item:item[1],reverse=True)[:20]:
+        print(f"    {name}: {value}")
     print(f"  selecionadas_com_salario: {selected_with_salary}")
     print(f"  selecionadas_a_combinar: {selected_without_salary}")
     print(f"  total_selecionado: {len(ordered_jobs[:MAX_JOBS_PER_DAY])}")
