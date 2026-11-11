@@ -273,10 +273,11 @@ def main():
                 elem.clear()
                 continue
 
-            if salary:
+            if salary and has_real_salary(salary):
                 counts["com_salario"]+=1
                 salary_value=salary
             else:
+                # Valor ausente, genérico ou sem moeda confiável vira A combinar.
                 counts["sem_salario"]+=1
                 salary_value="A combinar"
 
